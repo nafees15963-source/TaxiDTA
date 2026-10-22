@@ -1,0 +1,46 @@
+{
+  "name": "taxidta",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "dev": "tsx server/index.ts",
+    "build": "tsc --noEmit && vite build",
+    "start": "NODE_ENV=production tsx server/index.ts",
+    "test": "tsx --test tests/*.test.ts",
+    "test:e2e": "playwright test",
+    "lint": "tsc --noEmit",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "backup": "tsx scripts/backup.ts",
+    "restore:test": "tsx scripts/restore-test.ts",
+    "security:check": "tsx scripts/security-check.ts",
+    "check": "npm run test && npm run build && npm run security:check",
+    "supabase:check": "tsx scripts/supabase-check.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.118.0",
+    "express": "^5.1.0",
+    "lucide-react": "^0.468.0",
+    "pdfkit": "^0.17.2",
+    "qrcode": "1.5.4",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "undici": "8.12.3",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.0.0",
+    "@types/pdfkit": "^0.17.3",
+    "@types/qrcode": "1.5.6",
+    "@types/react": "^19.1.1",
+    "@types/react-dom": "^19.1.1",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.0"
+  }
+}

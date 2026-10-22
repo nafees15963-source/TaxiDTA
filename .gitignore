@@ -1,0 +1,16 @@
+node_modules/
+dist/
+work/
+private-source-docs/
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.key
+*.p12
+*.pfx
+playwright-report/
+test-results/
