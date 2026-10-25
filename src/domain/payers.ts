@@ -1,6 +1,6 @@
-import snapshot from "../../data/payers-2026-10-22.json";
-import privateSnapshot from "../../data/payers-private-2026-10-23.json";
-import routingSnapshot from "../../data/payers-routing-2026-09-15.json";
+import snapshot from "../../data/payers-2026-10-22.json" with { type: "json" };
+import privateSnapshot from "../../data/payers-private-2026-10-23.json" with { type: "json" };
+import routingSnapshot from "../../data/payers-routing-2026-09-15.json" with { type: "json" };
 
 export interface PayerDtaRoute {
   status:
