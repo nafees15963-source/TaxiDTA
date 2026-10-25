@@ -17,6 +17,9 @@ import { existsSync } from "node:fs";
 import { Store, ApiError } from "./store.js";
 import { calculateTariff } from "../src/domain/index.js";
 import { csvCell } from "./export.js";
+import {buildUnsentDtaStatus} from '../src/domain/dta/status.js';
+import { billingCaseRequestSchema } from './billing-case.js';
+import { searchPayers, resolvePayer, payerRegistrySummary, PayerRegistryError } from './payers.js';
 const date = z
   .string()
   .regex(
@@ -236,6 +239,24 @@ export async function createApp(options: AppOptions = {}) {
       csrfToken: config.authRequired ? res.locals.authCsrf : store.csrfToken,
     }),
   );
+  app.get('/api/payers', (req,res)=>{
+    const query=z.object({q:z.string().max(200).optional(),limit:z.coerce.number().int().min(1).max(200).optional()}).strict().parse(req.query);
+    res.json(searchPayers(query.q??'',query.limit??20));
+  });
+  app.get('/api/payers/summary', (_req,res)=>res.json(payerRegistrySummary()));
+  app.get('/api/payers/:id', (req,res)=>res.json(resolvePayer(z.string().max(160).parse(req.params.id))));
+  app.post('/api/billing-cases', (req,res)=>{
+    const {payerId,...body}=billingCaseRequestSchema.parse(req.body);
+    res.status(201).json(store.addBillingCase({...body,payer:resolvePayer(payerId)},parseCommandKey(req.get('idempotency-key'))));
+  });
+  app.post('/api/billing-cases/:id/update', (req,res)=>{
+    const {payerId,...body}=billingCaseRequestSchema.parse(req.body);
+    res.json(store.updateBillingCase(id.parse(req.params.id),{...body,payer:resolvePayer(payerId)}));
+  });
+  app.post('/api/invoices/from-cases',async(req,res)=>{
+    const body=z.object({caseIds:z.array(id).min(1).max(500),issuedAt:date}).strict().parse(req.body);
+    res.status(201).json(await store.issueCaseInvoice(body.caseIds,body.issuedAt,parseCommandKey(req.get('idempotency-key'))));
+  });
   app.post("/api/customers", (req, res) =>
     res.status(201).json(store.addCustomer(customerSchema.parse(req.body))),
   );
@@ -296,6 +317,11 @@ export async function createApp(options: AppOptions = {}) {
   app.post("/api/invoices/:id/dta-check", (req, res) =>
     res.status(201).json(store.dtaCheck(id.parse(req.params.id))),
   );
+  app.get('/api/invoices/:id/dta-status',(req,res)=>{
+    const invoice=store.invoice(id.parse(req.params.id));
+    const readiness=store.state().dtaChecks.find(check=>check.invoiceId===invoice.id)??null;
+    res.json(buildUnsentDtaStatus(invoice,readiness));
+  });
   app.get("/api/invoices/:id/dta-check/report", (req, res) => {
     const invoiceId = id.parse(req.params.id);
     store.invoice(invoiceId);
@@ -400,6 +426,7 @@ export async function createApp(options: AppOptions = {}) {
     }
   }
   const errors: ErrorRequestHandler = (err, _req, res, _next) => {
+    if(err instanceof PayerRegistryError){res.status(err.status).json({error:err.message,code:err.code});return;}
     if (err instanceof z.ZodError) {
       res
         .status(422)

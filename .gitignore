@@ -14,3 +14,8 @@ private-source-docs/
 *.pfx
 playwright-report/
 test-results/
+
+.sites-runtime/
+.wrangler/
+outputs/
+supabase/.temp/

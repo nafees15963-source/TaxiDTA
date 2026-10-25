@@ -1,4 +1,7 @@
+import AcceptanceDirectory from "./AcceptanceDirectory";
 import SetupPanel from "./SetupPanel";
+import BillingCasePanel from "./BillingCasePanel";
+import DtaStatusPanel from "./DtaStatusPanel";
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   LayoutDashboard,
@@ -32,8 +35,6 @@ import {
   CalendarDays,
   ExternalLink,
   Info,
-  Stethoscope,
-  Truck,
   Car,
   SlidersHorizontal,
   RefreshCw,
@@ -44,7 +45,6 @@ import {
 } from "lucide-react";
 import type {
   AppState,
-  Journey,
   Customer,
   Invoice,
   JourneyKind,
@@ -52,12 +52,7 @@ import type {
   TariffInput,
   DtaCheck,
 } from "./shared/types";
-import {
-  calculateTariff,
-  calculateTax,
-  parseMoney,
-  addCalendarDays,
-} from "./domain/index";
+import { calculateTariff, parseMoney, addCalendarDays } from "./domain/index";
 import {
   parseKeV09Subset,
   KeParseError,
@@ -68,7 +63,7 @@ import { SYNTHETIC_KE_V09 } from "./domain/ik-demo";
 
 type Page =
   | "overview"
-  | "journeys"
+  | "cases"
   | "customers"
   | "invoices"
   | "tariffs"
@@ -76,10 +71,10 @@ type Page =
   | "documents"
   | "reports"
   | "settings";
-type Dialog = "journey" | "customer" | "invoice" | "payment" | "cancel" | null;
+type Dialog = "customer" | "invoice" | "payment" | "cancel" | null;
 const nav = [
   { id: "overview", label: "Übersicht", icon: LayoutDashboard },
-  { id: "journeys", label: "Fahrten", icon: Route },
+  { id: "cases", label: "Abrechnungsfälle", icon: ClipboardList },
   { id: "customers", label: "Kunden & Kontakte", icon: Users },
   { id: "invoices", label: "Rechnungen & Zahlungen", icon: ReceiptText },
   { id: "tariffs", label: "Tariflabor", icon: Calculator },
@@ -297,10 +292,13 @@ export default function App() {
     [loadError, setLoadError] = useState(""),
     [page, setPage] = useState<Page>(
       () =>
-        (new URLSearchParams(location.search).get("page") as Page) ||
+        (new URLSearchParams(location.search).get("page") === "journeys"
+          ? "cases"
+          : (new URLSearchParams(location.search).get("page") as Page)) ||
         "overview",
     );
-  const [editingJourney, setEditingJourney] = useState<string | null>(null);
+  const privateSite = data?.deployment?.kind === "site-private";
+  const [caseCreateRequest, setCaseCreateRequest] = useState(0);
   const [dialog, setDialog] = useState<Dialog>(null),
     [palette, setPalette] = useState(false),
     [paletteQuery, setPaletteQuery] = useState(""),
@@ -310,33 +308,16 @@ export default function App() {
     [busy, setBusy] = useState(false),
     [selectedInvoice, setSelectedInvoice] = useState<string | null>(null);
   const [search, setSearch] = useState(""),
-    [journeyFilter, setJourneyFilter] = useState("all"),
     [invoiceFilter, setInvoiceFilter] = useState("all"),
     [dark, setDark] = useState(
       () => localStorage.getItem("taxidta.theme") === "dark",
     );
-  const commandKey = useRef(crypto.randomUUID());
+  const commandKey = useRef<string>(crypto.randomUUID());
   const [customerForm, setCustomerForm] = useState({
     name: "",
     kind: "private" as CustomerKind,
     address: "",
     reference: "",
-  });
-  const [journeyForm, setJourneyForm] = useState({
-    customerId: "",
-    kind: "taxi" as JourneyKind,
-    date: "2026-10-22",
-    from: "",
-    to: "",
-    km: "20",
-    vehicle: "taxi" as "taxi" | "rental",
-    sameMunicipality: "unknown",
-    gross: "",
-    description: "",
-    tariff: "I" as "I" | "II",
-    contractConfirmed: false,
-    prescriptionConfirmed: false,
-    receiptNumber: "",
   });
   const [invoiceCustomer, setInvoiceCustomer] = useState(""),
     [journeyIds, setJourneyIds] = useState<string[]>([]),
@@ -368,6 +349,17 @@ export default function App() {
     const r = await fetch("/api/state");
     if (!r.ok) {
       const problem = await r.json().catch(() => ({}));
+      if (
+        typeof problem.code === "string" &&
+        problem.code.startsWith("SITE_")
+      ) {
+        setAuthBlocked(false);
+        setData(null);
+        throw new Error(
+          problem.error ||
+            "Der private Testzugang konnte nicht bestätigt werden. Bitte erneut über deinen persönlichen Zugang öffnen.",
+        );
+      }
       const authFailure =
         typeof problem.code === "string" &&
         (problem.code.startsWith("AUTH_") ||
@@ -384,7 +376,7 @@ export default function App() {
       throw new Error(
         typeof problem.error === "string"
           ? problem.error
-          : "Der lokale Server antwortet nicht. Bitte npm run dev prüfen.",
+          : "Die Anwendung antwortet nicht. Bitte die Verbindung prüfen.",
       );
     }
     const d: AppState = await r.json();
@@ -401,6 +393,7 @@ export default function App() {
     localStorage.setItem("taxidta.theme", dark ? "dark" : "light");
   }, [dark]);
   useEffect(() => {
+    if (page !== "cases") setCaseCreateRequest(0);
     const valid = nav.some((n) => n.id === page);
     if (!valid) {
       setPage("overview");
@@ -445,6 +438,18 @@ export default function App() {
       });
       const value = await r.json();
       if (
+        !r.ok &&
+        typeof value.code === "string" &&
+        value.code.startsWith("SITE_")
+      ) {
+        setAuthBlocked(false);
+        setData(null);
+        setLoadError(
+          value.error ||
+            "Der private Testzugang konnte nicht bestätigt werden.",
+        );
+      }
+      if (
         (r.status === 401 || r.status === 403) &&
         typeof value.code === "string" &&
         (value.code.startsWith("AUTH_") || value.code.startsWith("SUPABASE_"))
@@ -475,17 +480,15 @@ export default function App() {
       setBusy(false);
     }
   };
+  const newBillingCase = () => {
+    setError("");
+    commandKey.current = crypto.randomUUID();
+    setPage("cases");
+    setCaseCreateRequest((value) => value + 1);
+  };
   const openDialog = (d: Dialog) => {
     setError("");
     commandKey.current = crypto.randomUUID();
-    if (d === "journey") {
-      setEditingJourney(null);
-      setJourneyForm((f) => ({
-        ...f,
-        customerId: data?.customers[0]?.id || "",
-        date: data?.businessDate || "2026-10-22",
-      }));
-    }
     if (d === "invoice") {
       setInvoiceCustomer("");
       setJourneyIds([]);
@@ -500,34 +503,9 @@ export default function App() {
       });
     setDialog(d);
   };
-  const editJourney = (j: Journey) => {
-    setEditingJourney(j.id);
-    setError("");
-    commandKey.current = crypto.randomUUID();
-    setJourneyForm({
-      customerId: j.customerId,
-      kind: j.kind,
-      date: j.date,
-      from: j.from,
-      to: j.to,
-      km: j.km,
-      vehicle: j.vehicle,
-      sameMunicipality:
-        j.sameMunicipality === null
-          ? "unknown"
-          : j.sameMunicipality
-            ? "yes"
-            : "no",
-      gross: (j.grossCents / 100).toFixed(2).replace(".", ","),
-      description: j.description,
-      tariff: j.tariff || "I",
-      contractConfirmed: j.contractConfirmed,
-      prescriptionConfirmed: j.prescriptionConfirmed,
-      receiptNumber: j.receiptNumber || "",
-    });
-    setDialog("journey");
-  };
   const customer = (id: string) => data?.customers.find((c) => c.id === id);
+  const billingCase = (id: string | undefined) =>
+    id ? data?.billingCases?.find((item) => item.id === id) : undefined;
   const currentInvoice =
     data?.invoices.find((i) => i.id === selectedInvoice) || null;
   const activeInvoices =
@@ -535,6 +513,8 @@ export default function App() {
       (i) => !i.originalInvoiceId && i.status !== "cancelled",
     ) || [];
   const unbilled = data?.journeys.filter((j) => !j.invoiceId) || [];
+  const unbilledCases =
+    data?.billingCases?.filter((item) => !item.invoiceId) || [];
   const totalOpen = activeInvoices.reduce((a, i) => a + outstanding(i), 0),
     totalPaid = activeInvoices.reduce((a, i) => a + paid(i), 0);
   const due = activeInvoices.filter(
@@ -546,34 +526,6 @@ export default function App() {
   const todayJourneys =
     data?.journeys.filter((j) => j.date === data.businessDate) || [];
   const medical = data?.journeys.filter((j) => j.kind === "medical") || [];
-  const preview = useMemo(() => {
-    try {
-      const same =
-        journeyForm.sameMunicipality === "unknown"
-          ? null
-          : journeyForm.sameMunicipality === "yes";
-      const tax = calculateTax({
-        kind: journeyForm.kind,
-        vehicle: journeyForm.vehicle,
-        km: journeyForm.km,
-        sameMunicipality: same,
-        date: journeyForm.date,
-      });
-      const t =
-        journeyForm.kind === "medical"
-          ? calculateTariff({
-              article: journeyForm.tariff,
-              km: journeyForm.km,
-              date: journeyForm.date,
-              persons: 1,
-              contractConfirmed: journeyForm.contractConfirmed,
-            })
-          : null;
-      return { tax, tariff: t, error: "" };
-    } catch (e) {
-      return { tax: null, tariff: null, error: message(e) };
-    }
-  }, [journeyForm]);
   const tariffResult = useMemo(() => {
     try {
       return { value: calculateTariff(tariff), error: "" };
@@ -586,21 +538,6 @@ export default function App() {
       .join(" ")
       .toLocaleLowerCase("de")
       .includes(search.toLocaleLowerCase("de"));
-  const visibleJourneys =
-    data?.journeys.filter(
-      (j) =>
-        (journeyFilter === "all" ||
-          (journeyFilter === "unbilled"
-            ? !j.invoiceId
-            : j.kind === journeyFilter)) &&
-        queryMatch(
-          customer(j.customerId)?.name,
-          j.from,
-          j.to,
-          j.description,
-          j.date,
-        ),
-    ) || [];
   const visibleInvoices =
     data?.invoices.filter(
       (i) =>
@@ -614,7 +551,9 @@ export default function App() {
                 !i.originalInvoiceId
               : i.status === "cancelled" || !!i.originalInvoiceId)),
     ) || [];
-  const available = unbilled.filter((j) => j.customerId === invoiceCustomer);
+  const available = unbilled.filter(
+    (j) => j.customerId === invoiceCustomer && !j.billingCaseId,
+  );
   const selectedJourneys = available.filter((j) => journeyIds.includes(j.id));
   const formError = error && (
     <div className="notice danger" role="alert">
@@ -753,7 +692,7 @@ export default function App() {
           T<span>D</span>
         </div>
         <h1>TaxiDTA</h1>
-        <p>{loadError || "Die lokale Testumgebung wird geladen …"}</p>
+        <p>{loadError || "Die Testumgebung wird geladen …"}</p>
         {loadError && (
           <button className="button primary" onClick={() => location.reload()}>
             Erneut versuchen
@@ -766,7 +705,9 @@ export default function App() {
       <div className="demo-banner">
         <span>
           <ShieldCheck size={14} />
-          <strong>Lokale Demo</strong>
+          <strong>
+            {privateSite ? "Privater Testbetrieb" : "Lokale Demo"}
+          </strong>
           <span className="banner-detail">
             Ausschließlich erfundene Daten · Kein Produktivversand
           </span>
@@ -793,9 +734,9 @@ export default function App() {
           </div>
         </a>
         <div className="workspace-chip">
-          <div className="avatar pale">MT</div>
+          <div className="avatar pale">IT</div>
           <div>
-            <strong>Muster Taxi</strong>
+            <strong>Insel Taxi</strong>
             <span>Testbetrieb · Einzelkonto</span>
           </div>
           <LockKeyhole size={14} />
@@ -812,9 +753,6 @@ export default function App() {
             >
               <n.icon size={19} />
               <span>{n.label}</span>
-              {n.id === "journeys" && unbilled.length > 0 && (
-                <b>{unbilled.length}</b>
-              )}
             </button>
           ))}
           <div className="nav-section">PRÜFEN & ORGANISIEREN</div>
@@ -836,8 +774,14 @@ export default function App() {
           <div className="local-status">
             <span />
             <div>
-              <strong>Lokal gespeichert</strong>
-              <small>SQLite · Nur Testdaten</small>
+              <strong>
+                {privateSite ? "Privat gespeichert" : "Lokal gespeichert"}
+              </strong>
+              <small>
+                {privateSite
+                  ? "Privater Cloudspeicher · Testdaten"
+                  : "Auf diesem Rechner · Testdaten"}
+              </small>
             </div>
             <ShieldCheck size={16} />
           </div>
@@ -852,7 +796,9 @@ export default function App() {
             <div className="avatar">M</div>
             <div>
               <strong>Demo-Inhaber</strong>
-              <small>Lokaler Testzugang</small>
+              <small>
+                {privateSite ? "Privater Testzugang" : "Lokaler Testzugang"}
+              </small>
             </div>
             <button
               aria-label={dark ? "Helles Design" : "Dunkles Design"}
@@ -920,8 +866,8 @@ export default function App() {
               <p>
                 {page === "overview"
                   ? "Von der ersten Fahrt bis zum Zahlungseingang. Ihr Büro läuft zusammen."
-                  : page === "journeys"
-                    ? "Fahrten erfassen, prüfen und gemeinsam abrechnen."
+                  : page === "cases"
+                    ? "Eine Verordnung mit allen Fahrtdaten. Mehrere Fälle gemeinsam abrechnen."
                     : page === "invoices"
                       ? "Jede Rechnung nachvollziehbar. Jede Zahlung richtig zugeordnet."
                       : page === "tariffs"
@@ -938,7 +884,12 @@ export default function App() {
               </p>
             </div>
             <div className="heading-actions">
-              {page === "customers" ? (
+              {page === "cases" ? (
+                <button className="button primary" onClick={newBillingCase}>
+                  <Plus size={17} />
+                  Neue Abrechnung
+                </button>
+              ) : page === "customers" ? (
                 <button
                   className="button primary"
                   onClick={() => openDialog("customer")}
@@ -946,22 +897,11 @@ export default function App() {
                   <Plus size={17} />
                   Neuer Kunde
                 </button>
-              ) : page === "journeys" ? (
-                <button
-                  className="button primary"
-                  onClick={() => openDialog("journey")}
-                >
-                  <Plus size={17} />
-                  Fahrt erfassen
-                </button>
               ) : page === "overview" || page === "invoices" ? (
                 <>
-                  <button
-                    className="button secondary"
-                    onClick={() => openDialog("journey")}
-                  >
+                  <button className="button primary" onClick={newBillingCase}>
                     <Plus size={17} />
-                    Fahrt erfassen
+                    Neue Abrechnung
                   </button>
                   <button
                     className="button primary"
@@ -974,7 +914,7 @@ export default function App() {
               ) : null}
             </div>
           </div>
-          {error && !dialog && (
+          {error && !dialog && page !== "cases" && (
             <div className="notice danger" role="alert">
               <AlertTriangle size={18} />
               <span>{error}</span>
@@ -986,6 +926,44 @@ export default function App() {
                 <X size={16} />
               </button>
             </div>
+          )}
+          {page === "cases" && (
+            <BillingCasePanel
+              cases={data.billingCases ?? []}
+              businessDate={data.businessDate}
+              requestNew={caseCreateRequest}
+              busy={busy}
+              error={error}
+              onSave={async (input, caseId) => {
+                const result = await mutate(
+                  caseId
+                    ? "/billing-cases/" + caseId + "/update"
+                    : "/billing-cases",
+                  input,
+                  caseId
+                    ? "Abrechnungsfall aktualisiert."
+                    : "Abrechnungsfall mit allen Fahrten gespeichert.",
+                );
+                return !!result;
+              }}
+              onInvoice={async (caseIds, invoiceDate, caseCommandKey) => {
+                commandKey.current = caseCommandKey;
+                const result = await mutate(
+                  "/invoices/from-cases",
+                  { caseIds, issuedAt: invoiceDate },
+                  "Fälle gebündelt und Rechnungsoriginal erstellt.",
+                );
+                if (result) {
+                  setSelectedInvoice(result.id || result.invoice?.id);
+                  setPage("invoices");
+                }
+                return !!result;
+              }}
+              onOpenInvoice={(invoiceId) => {
+                setSelectedInvoice(invoiceId);
+                setPage("invoices");
+              }}
+            />
           )}
           {page === "overview" && (
             <>
@@ -1014,12 +992,19 @@ export default function App() {
                     </div>
                   </div>
                   <strong>
-                    {unbilled.length}
-                    <span> Fahrten</span>
+                    {unbilledCases.length}
+                    <span>
+                      {unbilledCases.length === 1 ? " Fall" : " Fälle"}
+                    </span>
                   </strong>
                   <small>
-                    {money(unbilled.reduce((a, j) => a + j.grossCents, 0))}{" "}
-                    gespeicherter Fahrtwert
+                    {money(
+                      unbilledCases.reduce(
+                        (total, item) => total + item.grossCents,
+                        0,
+                      ),
+                    )}{" "}
+                    gespeicherter Fallwert
                   </small>
                 </div>
                 <div className="stat-card">
@@ -1069,24 +1054,15 @@ export default function App() {
                       <div className="welcome-actions">
                         <button
                           className="button primary"
-                          onClick={() => openDialog("invoice")}
+                          onClick={newBillingCase}
                         >
-                          Normale Rechnung erstellen <ArrowRight size={15} />
+                          Neue Abrechnung starten <ArrowRight size={15} />
                         </button>
                         <button
                           className="text-button"
-                          onClick={() => {
-                            openDialog("journey");
-                            setJourneyForm((f) => ({
-                              ...f,
-                              kind: "medical",
-                              customerId:
-                                data.customers.find((c) => c.kind === "payer")
-                                  ?.id || "",
-                            }));
-                          }}
+                          onClick={() => openDialog("invoice")}
                         >
-                          Krankenfahrt abrechnen <Stethoscope size={15} />
+                          Normale Rechnung erstellen <ReceiptText size={15} />
                         </button>
                       </div>
                     </div>
@@ -1197,17 +1173,23 @@ export default function App() {
                     <div className="task-list">
                       <button
                         onClick={() => {
-                          setJourneyFilter("unbilled");
-                          setPage("journeys");
+                          setPage("cases");
                         }}
                       >
                         <div className="task-icon mint">
                           <ReceiptText size={18} />
                         </div>
                         <div>
-                          <strong>{unbilled.length} Fahrten abrechnen</strong>
+                          <strong>
+                            {
+                              (data.billingCases ?? []).filter(
+                                (item) => !item.invoiceId,
+                              ).length
+                            }{" "}
+                            Fälle abrechnen
+                          </strong>
                           <p>
-                            Gespeicherte Leistungen zur
+                            Vollständige Abrechnungsfälle zur
                             <br />
                             Rechnung zusammenfassen.
                           </p>
@@ -1265,7 +1247,7 @@ export default function App() {
                     </div>
                     <h3>Ein sicherer Anfang.</h3>
                     <p>
-                      Diese Umgebung arbeitet lokal mit erfundenen Daten.
+                      Diese Testumgebung arbeitet mit erfundenen Daten.
                       Produktiver DTA-Versand ist technisch gesperrt.
                     </p>
                     <button
@@ -1282,134 +1264,13 @@ export default function App() {
                           <span className="activity-dot" />
                           <div>
                             <strong>{a.action.replaceAll("_", " ")}</strong>
-                            <small>
-                              {timestamp(a.at)} · lokal protokolliert
-                            </small>
+                            <small>{timestamp(a.at)} · protokolliert</small>
                           </div>
                         </div>
                       ))}
                     </div>
                   </Card>
                 </div>
-              </div>
-            </>
-          )}
-          {page === "journeys" && (
-            <>
-              <div className="tabs-bar">
-                <div className="tabs">
-                  {[
-                    ["all", "Alle Fahrten"],
-                    ["unbilled", "Nicht abgerechnet"],
-                    ["medical", "Krankenfahrten"],
-                    ["courier", "Kurier"],
-                    ["laboratory", "Labor"],
-                  ].map(([k, l]) => (
-                    <button
-                      key={k}
-                      className={journeyFilter === k ? "selected" : ""}
-                      onClick={() => setJourneyFilter(k)}
-                    >
-                      {l}
-                      {k === "unbilled" && <span>{unbilled.length}</span>}
-                    </button>
-                  ))}
-                </div>
-                {searchBar("Fahrten suchen …")}
-              </div>
-              <Card>
-                <div className="table-scroll">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Datum</th>
-                        <th>Kunde / Leistungsart</th>
-                        <th>Strecke</th>
-                        <th className="number">Besetzt-km</th>
-                        <th className="number">Brutto</th>
-                        <th>Abrechnung</th>
-                        <th>Aktion</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {visibleJourneys.map((j) => (
-                        <tr key={j.id}>
-                          <td>{date(j.date)}</td>
-                          <td>
-                            <strong>{customer(j.customerId)?.name}</strong>
-                            <small>{kindLabels[j.kind]}</small>
-                          </td>
-                          <td>
-                            <div className="route-cell">
-                              <span>
-                                <i />
-                                {j.from}
-                              </span>
-                              <span>
-                                <i />
-                                {j.to}
-                              </span>
-                            </div>
-                          </td>
-                          <td className="number">{j.km.replace(".", ",")}</td>
-                          <td className="number">
-                            <strong>{money(j.grossCents)}</strong>
-                          </td>
-                          <td>
-                            {j.invoiceId ? (
-                              <button
-                                className="text-button"
-                                onClick={() => {
-                                  setSelectedInvoice(j.invoiceId);
-                                  setPage("invoices");
-                                }}
-                              >
-                                <CheckCheck size={14} />
-                                Abgerechnet
-                              </button>
-                            ) : (
-                              <Status tone="amber">Bereit zur Prüfung</Status>
-                            )}
-                          </td>
-                          <td>
-                            {!j.invoiceId && (
-                              <button
-                                className="text-button"
-                                onClick={() => editJourney(j)}
-                              >
-                                Bearbeiten
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {!visibleJourneys.length && (
-                    <Empty
-                      title="Keine passenden Fahrten"
-                      text="Ändern Sie den Filter oder erfassen Sie eine neue Testfahrt."
-                    />
-                  )}
-                </div>
-                <div className="table-footer">
-                  <span>
-                    {visibleJourneys.length} von {data.journeys.length} Fahrten
-                  </span>
-                  <button
-                    className="text-button"
-                    onClick={() => openDialog("invoice")}
-                  >
-                    Fahrten zusammen abrechnen <ArrowRight size={15} />
-                  </button>
-                </div>
-              </Card>
-              <div className="notice">
-                <Info size={18} />
-                <span>
-                  Besetzte Kilometer sind die gesamte beförderte Strecke. Bei
-                  Art. I und II sind die ersten 3 km im Grundpreis enthalten.
-                </span>
               </div>
             </>
           )}
@@ -1467,24 +1328,6 @@ export default function App() {
                           offen
                         </span>
                       </div>
-                      <button
-                        className="text-button"
-                        onClick={() => {
-                          openDialog("journey");
-                          setJourneyForm((f) => ({
-                            ...f,
-                            customerId: c.id,
-                            kind:
-                              c.kind === "payer"
-                                ? "medical"
-                                : c.kind === "laboratory"
-                                  ? "laboratory"
-                                  : "taxi",
-                          }));
-                        }}
-                      >
-                        Fahrt für diesen Kunden <Plus size={15} />
-                      </button>
                     </Card>
                   ))}
               </div>
@@ -1633,6 +1476,10 @@ export default function App() {
                         <dd>{money(outstanding(currentInvoice))}</dd>
                       </div>
                     </dl>
+                    {currentInvoice.customerSnapshot.kind === "payer" &&
+                      !currentInvoice.originalInvoiceId && (
+                        <DtaStatusPanel invoiceId={currentInvoice.id} />
+                      )}
                     <a
                       className="button primary full"
                       href={"/api/invoices/" + currentInvoice.id + "/pdf"}
@@ -1980,12 +1827,13 @@ export default function App() {
           )}
           {page === "dta" && (
             <>
+              <AcceptanceDirectory />
               <div className="notice warning">
                 <LockKeyhole size={21} />
                 <div>
                   <strong>Produktivversand gesperrt</strong>
                   <p>
-                    Diese Version erzeugt einen lokalen Bereitschaftsbericht.
+                    Diese Version erzeugt einen internen Bereitschaftsbericht.
                     Eine §302-Nutzdatei, Verschlüsselung, Übertragung und
                     Kassenannahme sind noch nicht implementiert.
                   </p>
@@ -2043,13 +1891,15 @@ export default function App() {
                         >
                           <option value="">Rechnung auswählen …</option>
                           {activeInvoices
-                            .filter((i) =>
-                              i.lines.some(
-                                (l) =>
-                                  data.journeys.find(
-                                    (j) => j.id === l.journeyId,
-                                  )?.kind === "medical",
-                              ),
+                            .filter(
+                              (i) =>
+                                i.customerSnapshot.kind === "payer" ||
+                                i.lines.some(
+                                  (l) =>
+                                    data.journeys.find(
+                                      (j) => j.id === l.journeyId,
+                                    )?.kind === "medical",
+                                ),
                             )
                             .map((i) => (
                               <option key={i.id} value={i.id}>
@@ -2070,10 +1920,17 @@ export default function App() {
                         }}
                       >
                         <ShieldCheck size={17} />
-                        Lokale Vorprüfung starten
+                        {privateSite
+                          ? "Vorprüfung starten"
+                          : "Lokale Vorprüfung starten"}
                       </button>
                     </div>
                   </Card>
+                  {dtaInvoice && (
+                    <Card>
+                      <DtaStatusPanel invoiceId={dtaInvoice} />
+                    </Card>
+                  )}
                   <Card
                     title="IK-Inspektor"
                     sub="Keine Zuordnung aus Kassennamen ableiten"
@@ -2280,7 +2137,7 @@ export default function App() {
               </Card>
               <Card
                 title="Prüfverlauf"
-                sub="Lokale Bereitschaftsberichte, getrennt von echten Übertragungen"
+                sub="Bereitschaftsberichte, getrennt von echten Übertragungen"
               >
                 {data.dtaChecks.length ? (
                   <div className="check-history">
@@ -2296,7 +2153,7 @@ export default function App() {
                                 ?.number || d.invoiceId}
                             </strong>
                             <small>
-                              {timestamp(d.createdAt)} · lokale Vorprüfung
+                              {timestamp(d.createdAt)} · interne Vorprüfung
                             </small>
                           </div>
                           <Status tone="red">Gesperrt</Status>
@@ -2558,24 +2415,32 @@ export default function App() {
           )}
           {page === "settings" && (
             <>
-              <SetupPanel
-                onAuthenticated={() => {
-                  void refresh().catch((e) => setLoadError(message(e)));
-                }}
-                onSignedOut={() => {
-                  void refresh().catch((e) => setLoadError(message(e)));
-                }}
-              />
+              {(!privateSite ||
+                data.deployment?.financialStorage === "cloud-supabase") && (
+                <SetupPanel
+                  onAuthenticated={() => {
+                    void refresh().catch((e) => setLoadError(message(e)));
+                  }}
+                  onSignedOut={() => {
+                    void refresh().catch((e) => setLoadError(message(e)));
+                  }}
+                />
+              )}
               <div className="notice">
                 <ShieldCheck size={21} />
                 <div>
-                  <strong>Sie arbeiten in einer lokalen Testumgebung.</strong>
+                  <strong>
+                    {privateSite
+                      ? "Du arbeitest in einer privaten Testwebsite."
+                      : "Sie arbeiten in einer lokalen Testumgebung."}
+                  </strong>
                   <p>
-                    Lokale Testanwendung mit optionaler oder verpflichtender
-                    Inhaber-Anmeldung gemäß Einrichtung. Keine echten
-                    Gesundheits-, Bank- oder Zertifikatsdaten eingeben. Ein
-                    Produktivmodus lässt sich in dieser Version nicht
-                    einschalten.
+                    {privateSite
+                      ? "Der Zugang ist privat. Die Testdaten werden auf dem Server gespeichert und stehen nach einem erneuten Öffnen wieder bereit."
+                      : "Lokale Testanwendung mit optionaler oder verpflichtender Inhaber-Anmeldung gemäß Einrichtung."}{" "}
+                    Keine echten Gesundheits-, Bank- oder Zertifikatsdaten
+                    eingeben. Diese Testversion ist nicht für echte Abrechnungen
+                    freigegeben.
                   </p>
                 </div>
               </div>
@@ -2587,8 +2452,12 @@ export default function App() {
                   <div className="control-list">
                     {[
                       [
-                        "Lokale Speicherung",
-                        "SQLite-Datenbank im Ordner work/.",
+                        privateSite
+                          ? "Private Cloudspeicherung"
+                          : "Lokale Speicherung",
+                        privateSite
+                          ? "Synthetische Fälle und Rechnungen im privaten Testzugang gespeichert."
+                          : "Testdaten bleiben auf diesem Rechner.",
                         "Aktiv",
                         true,
                       ],
@@ -2611,14 +2480,22 @@ export default function App() {
                         true,
                       ],
                       [
-                        "Authenticator",
-                        "Supabase-TOTP im Einrichtungsbereich; persönlicher Abschlusstest erforderlich.",
-                        "Einrichten",
-                        false,
+                        privateSite
+                          ? "Privater Website-Zugang"
+                          : "Authenticator",
+                        privateSite
+                          ? "Der private Zugang wird vor der Verwendung der Website geprüft. Eine Freigabe für Gesundheitsdaten folgt daraus nicht."
+                          : "Supabase-TOTP im Einrichtungsbereich; persönlicher Abschlusstest erforderlich.",
+                        privateSite ? "Privat" : "Einrichten",
+                        privateSite,
                       ],
                       [
-                        "Supabase Frankfurt",
-                        "Einrichtung und Region im Bereich Supabase prüfen. Finanzdaten bleiben lokal.",
+                        privateSite
+                          ? "Datenschutz vor Echtdaten"
+                          : "Supabase Frankfurt",
+                        privateSite
+                          ? "Standort, Wiederherstellung, Auftragsverarbeitung und alle Datenflüsse müssen vor Echtdaten freigegeben werden."
+                          : "Einrichtung und Region im Bereich Supabase prüfen. Finanzdaten bleiben lokal.",
                         "Offen",
                         false,
                       ],
@@ -2650,18 +2527,30 @@ export default function App() {
                     sub="Verschlüsseln und Restore wirklich prüfen"
                   >
                     <div className="form-body">
-                      <p>
-                        Die lokale Datenbank bleibt in Ihrem Projektordner. Für
-                        eine verschlüsselte Sicherung im Terminal:
-                      </p>
-                      <code className="command-line">npm run backup</code>
-                      <p>
-                        Die Sicherung auf Integrität und Wiederherstellbarkeit
-                        prüfen:
-                      </p>
-                      <code className="command-line">
-                        npm run restore:test -- work/backups/datei.tdbak
-                      </code>
+                      {privateSite ? (
+                        <p>
+                          Für diese private Testwebsite ist noch kein
+                          vollständiger Wiederherstellungsnachweis abgenommen.
+                          Der CSV-Export ist eine Rechnungsübersicht und ersetzt
+                          keine vollständige Sicherung aller Fälle und
+                          Originale.
+                        </p>
+                      ) : (
+                        <>
+                          <p>
+                            Die lokale Datenbank bleibt in Ihrem Projektordner.
+                            Für eine verschlüsselte Sicherung im Terminal:
+                          </p>
+                          <code className="command-line">npm run backup</code>
+                          <p>
+                            Die Sicherung auf Integrität und
+                            Wiederherstellbarkeit prüfen:
+                          </p>
+                          <code className="command-line">
+                            npm run restore:test -- work/backups/datei.tdbak
+                          </code>
+                        </>
+                      )}
                       <div className="notice warning">
                         <Info size={16} />
                         <span>
@@ -2694,7 +2583,7 @@ export default function App() {
                 </div>
               </div>
               <Card
-                title="Lokales Änderungsjournal"
+                title="Änderungsjournal"
                 sub="Verkettete Hashes unterstützen die Integritätsprüfung; kein extern versiegeltes Archiv."
               >
                 <div className="table-scroll">
@@ -2729,7 +2618,8 @@ export default function App() {
           <footer className="footer">
             <span>
               <span className="tiny-dot green-dot" />
-              TaxiDTA {data.version} · Lokal gespeichert
+              TaxiDTA {data.version} ·{" "}
+              {privateSite ? "Privat gespeichert" : "Lokal gespeichert"}
             </span>
             <span>Testbetrieb · Keine echten Daten · Keine DTA-Freigabe</span>
           </footer>
@@ -2769,11 +2659,15 @@ export default function App() {
             <div className="palette-results">
               {[
                 {
+                  id: "new-case",
+                  label: "Neue Abrechnung starten",
+                  icon: ClipboardList,
+                },
+                {
                   id: "new-invoice",
                   label: "Neue Rechnung erstellen",
                   icon: Plus,
                 },
-                { id: "new-journey", label: "Neue Fahrt erfassen", icon: Plus },
                 ...nav,
               ]
                 .filter((n) =>
@@ -2784,8 +2678,8 @@ export default function App() {
                     key={n.id}
                     onClick={() => {
                       setPalette(false);
-                      if (n.id === "new-invoice") openDialog("invoice");
-                      else if (n.id === "new-journey") openDialog("journey");
+                      if (n.id === "new-case") newBillingCase();
+                      else if (n.id === "new-invoice") openDialog("invoice");
                       else setPage(n.id as Page);
                     }}
                   >
@@ -2808,11 +2702,7 @@ export default function App() {
             onSubmit={async (e) => {
               e.preventDefault();
               if (
-                await mutate(
-                  "/customers",
-                  customerForm,
-                  "Kunde lokal gespeichert.",
-                )
+                await mutate("/customers", customerForm, "Kunde gespeichert.")
               )
                 closeDialog();
             }}
@@ -2886,342 +2776,6 @@ export default function App() {
               </button>
               <button className="button primary" disabled={busy}>
                 {busy ? "Speichert …" : "Kunde speichern"}
-              </button>
-            </div>
-          </form>
-        </Modal>
-      )}
-      {dialog === "journey" && (
-        <Modal
-          title={editingJourney ? "Offene Fahrt bearbeiten" : "Fahrt erfassen"}
-          sub="Leistungsdatum und Rechnungsdatum bleiben getrennt."
-          onClose={closeDialog}
-        >
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              let grossCents: number;
-              try {
-                grossCents =
-                  journeyForm.kind === "medical"
-                    ? (preview.tariff?.grossCents ?? 0)
-                    : parseMoney(journeyForm.gross);
-              } catch (e) {
-                setError(message(e));
-                return;
-              }
-              const body = {
-                customerId: journeyForm.customerId,
-                kind: journeyForm.kind,
-                date: journeyForm.date,
-                from: journeyForm.from,
-                to: journeyForm.to,
-                km: journeyForm.km,
-                vehicle: journeyForm.vehicle,
-                sameMunicipality:
-                  journeyForm.sameMunicipality === "unknown"
-                    ? null
-                    : journeyForm.sameMunicipality === "yes",
-                grossCents,
-                description:
-                  journeyForm.description || kindLabels[journeyForm.kind],
-                tariff:
-                  journeyForm.kind === "medical" ? journeyForm.tariff : null,
-                contractConfirmed: journeyForm.contractConfirmed,
-                prescriptionConfirmed: journeyForm.prescriptionConfirmed,
-                receiptNumber: journeyForm.receiptNumber || null,
-              };
-              if (
-                await mutate(
-                  editingJourney
-                    ? "/journeys/" + editingJourney + "/update"
-                    : "/journeys",
-                  body,
-                  editingJourney
-                    ? "Offene Fahrt korrigiert und Änderung protokolliert."
-                    : "Fahrt gespeichert. Sie kann jetzt abgerechnet werden.",
-                )
-              )
-                closeDialog();
-            }}
-          >
-            <div className="form-body">
-              {formError}
-              <div className="notice">
-                <Info size={17} />
-                <span>
-                  Unterstützt werden inländische Standardleistungen im Prüfjahr
-                  2026. Internationale, steuerbefreite und weitere Sonderfälle
-                  sind noch nicht abgedeckt.
-                </span>
-              </div>
-              <div className="form-grid">
-                <Field label="Kunde / Test-Kostenträger">
-                  <select
-                    required
-                    value={journeyForm.customerId}
-                    onChange={(e) =>
-                      setJourneyForm((f) => ({
-                        ...f,
-                        customerId: e.target.value,
-                      }))
-                    }
-                  >
-                    <option value="">Bitte wählen</option>
-                    {data.customers
-                      .filter((c) =>
-                        journeyForm.kind === "medical"
-                          ? c.kind === "payer"
-                          : c.kind !== "payer",
-                      )
-                      .map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                  </select>
-                </Field>
-                <Field label="Leistungsart">
-                  <select
-                    value={journeyForm.kind}
-                    onChange={(e) => {
-                      const kind = e.target.value as JourneyKind;
-                      setJourneyForm((f) => ({
-                        ...f,
-                        kind,
-                        customerId:
-                          data.customers.find(
-                            (c) =>
-                              c.id === f.customerId &&
-                              (kind === "medical"
-                                ? c.kind === "payer"
-                                : c.kind !== "payer"),
-                          )?.id ||
-                          data.customers.find((c) =>
-                            kind === "medical"
-                              ? c.kind === "payer"
-                              : c.kind !== "payer",
-                          )?.id ||
-                          "",
-                      }));
-                    }}
-                  >
-                    {Object.entries(kindLabels).map(([k, v]) => (
-                      <option key={k} value={k}>
-                        {v}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="Leistungsdatum">
-                  <input
-                    required
-                    type="date"
-                    value={journeyForm.date}
-                    onChange={(e) =>
-                      setJourneyForm((f) => ({ ...f, date: e.target.value }))
-                    }
-                  />
-                </Field>
-                <Field label="Besetzte Kilometer">
-                  <input
-                    required
-                    inputMode="decimal"
-                    value={journeyForm.km}
-                    onChange={(e) =>
-                      setJourneyForm((f) => ({ ...f, km: e.target.value }))
-                    }
-                  />
-                </Field>
-                <Field label="Abholort">
-                  <input
-                    required
-                    maxLength={180}
-                    value={journeyForm.from}
-                    placeholder="Musterstraße 1"
-                    onChange={(e) =>
-                      setJourneyForm((f) => ({ ...f, from: e.target.value }))
-                    }
-                  />
-                </Field>
-                <Field label="Zielort">
-                  <input
-                    required
-                    maxLength={180}
-                    value={journeyForm.to}
-                    placeholder="Beispielbahnhof"
-                    onChange={(e) =>
-                      setJourneyForm((f) => ({ ...f, to: e.target.value }))
-                    }
-                  />
-                </Field>
-                <Field label="Fahrzeugart">
-                  <select
-                    value={journeyForm.vehicle}
-                    onChange={(e) =>
-                      setJourneyForm((f) => ({
-                        ...f,
-                        vehicle: e.target.value as "taxi" | "rental",
-                      }))
-                    }
-                  >
-                    <option value="taxi">Taxi</option>
-                    <option value="rental">
-                      Mietwagen · gesonderte Regelprüfung
-                    </option>
-                  </select>
-                </Field>
-                <Field label="Vollständig innerhalb einer Gemeinde?">
-                  <select
-                    value={journeyForm.sameMunicipality}
-                    onChange={(e) =>
-                      setJourneyForm((f) => ({
-                        ...f,
-                        sameMunicipality: e.target.value,
-                      }))
-                    }
-                  >
-                    <option value="unknown">Noch ungeklärt</option>
-                    <option value="yes">Ja</option>
-                    <option value="no">Nein</option>
-                  </select>
-                </Field>
-              </div>
-              <Field label="Leistungsbeschreibung (optional)">
-                <input
-                  maxLength={240}
-                  value={journeyForm.description}
-                  placeholder={kindLabels[journeyForm.kind]}
-                  onChange={(e) =>
-                    setJourneyForm((f) => ({
-                      ...f,
-                      description: e.target.value,
-                    }))
-                  }
-                />
-              </Field>
-              {journeyForm.kind === "medical" ? (
-                <>
-                  <Field label="Vertragsart">
-                    <select
-                      value={journeyForm.tariff}
-                      onChange={(e) =>
-                        setJourneyForm((f) => ({
-                          ...f,
-                          tariff: e.target.value as "I" | "II",
-                        }))
-                      }
-                    >
-                      <option value="I">
-                        Art. I · Allgemeine Einpersonenfahrt
-                      </option>
-                      <option value="II">
-                        Art. II · Serienbehandlung, eine Person
-                      </option>
-                    </select>
-                  </Field>
-                  <label className="check-field">
-                    <input
-                      type="checkbox"
-                      checked={journeyForm.contractConfirmed}
-                      onChange={(e) =>
-                        setJourneyForm((f) => ({
-                          ...f,
-                          contractConfirmed: e.target.checked,
-                        }))
-                      }
-                    />
-                    <span>Vertragsberechtigung für den Testfall bestätigt</span>
-                  </label>
-                  <label className="check-field">
-                    <input
-                      type="checkbox"
-                      checked={journeyForm.prescriptionConfirmed}
-                      onChange={(e) =>
-                        setJourneyForm((f) => ({
-                          ...f,
-                          prescriptionConfirmed: e.target.checked,
-                        }))
-                      }
-                    />
-                    <span>
-                      Verordnung und Genehmigung im Testfall geprüft
-                      <small>
-                        Manuelle Testbestätigung; kein vollständiger
-                        Muster-4-Workflow.
-                      </small>
-                    </span>
-                  </label>
-                  <Field label="Eindeutige Belegnummer für die Abrechnung">
-                    <input
-                      maxLength={40}
-                      required={journeyForm.kind === "medical"}
-                      value={journeyForm.receiptNumber}
-                      onChange={(e) =>
-                        setJourneyForm((f) => ({
-                          ...f,
-                          receiptNumber: e.target.value,
-                        }))
-                      }
-                    />
-                  </Field>
-                </>
-              ) : (
-                <Field
-                  label="Vereinbarter Gesamtpreis brutto (€)"
-                  hint="Eingabe des tatsächlich vereinbarten Testpreises."
-                >
-                  <input
-                    required
-                    inputMode="decimal"
-                    placeholder="z. B. 35,00"
-                    value={journeyForm.gross}
-                    onChange={(e) =>
-                      setJourneyForm((f) => ({ ...f, gross: e.target.value }))
-                    }
-                  />
-                </Field>
-              )}
-              {preview.error ? (
-                <div className="notice warning">
-                  <AlertTriangle size={17} />
-                  <span>{preview.error}</span>
-                </div>
-              ) : (
-                <div className="price-preview">
-                  <div>
-                    <ShieldCheck size={19} />
-                    <span>
-                      {preview.tax?.reason}
-                      <small>
-                        {preview.tax?.rate} % Umsatzsteuer
-                        {preview.tariff ? " · Tarif aus Originalquelle" : ""}
-                      </small>
-                    </span>
-                  </div>
-                  {preview.tariff && (
-                    <strong>{money(preview.tariff.grossCents)}</strong>
-                  )}
-                </div>
-              )}
-            </div>
-            <div className="modal-footer">
-              <button
-                type="button"
-                className="button secondary"
-                onClick={closeDialog}
-              >
-                Abbrechen
-              </button>
-              <button
-                className="button primary"
-                disabled={busy || !!preview.error}
-              >
-                {busy
-                  ? "Speichert …"
-                  : editingJourney
-                    ? "Änderungen speichern"
-                    : "Fahrt speichern"}
               </button>
             </div>
           </form>
@@ -3323,7 +2877,7 @@ export default function App() {
                     {!available.length && (
                       <Empty
                         title="Keine offenen Fahrten"
-                        text="Erfassen Sie zuerst eine Fahrt für diesen Kunden. Bereits abgerechnete Fahrten sind gesperrt."
+                        text="Für diesen Kontakt sind keine offenen Leistungen gespeichert. Krankenfahrten werden im Abrechnungsfall erfasst; bereits abgerechnete Leistungen bleiben gesperrt."
                       />
                     )}
                   </div>

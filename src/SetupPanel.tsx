@@ -35,7 +35,7 @@ export interface SetupStatus {
   ownIkConfigured: boolean;
   authRequired: boolean;
   productionReady: false;
-  financialStorage: "local-sqlite";
+  financialStorage: "local-sqlite" | "cloud-supabase";
   dtaTransport: "blocked";
   auth: SetupAuthView | null;
 }
@@ -130,7 +130,7 @@ export default function SetupPanel({
       });
       if (!response.ok)
         throw new Error(
-          "Der Einrichtungsstatus ist nicht erreichbar. Bitte den lokalen Server prüfen.",
+          "Der Einrichtungsstatus ist nicht erreichbar. Bitte die Verbindung prüfen.",
         );
       const next = (await response.json()) as SetupStatus;
       if (
@@ -231,7 +231,7 @@ export default function SetupPanel({
       typeof next.secret !== "string" ||
       !/^[A-Z2-7]+=*$/i.test(next.secret) ||
       typeof next.qrDataUrl !== "string" ||
-      !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(next.qrDataUrl) ||
+      !/^data:image\/(?:png|svg\+xml);base64,[A-Za-z0-9+/=]+$/.test(next.qrDataUrl) ||
       next.qrDataUrl.length > 1_000_000
     ) {
       setError(
@@ -357,7 +357,7 @@ export default function SetupPanel({
           <LockKeyhole size={18} />
           <p>
             Für diesen Arbeitsplatz ist die Inhaber-Anmeldung mit zweitem Faktor
-            erforderlich. Melde dich an, um die lokale Testumgebung zu öffnen.
+            erforderlich. Melde dich an, um deinen Testbereich zu öffnen.
           </p>
         </div>
       )}
@@ -777,12 +777,14 @@ export default function SetupPanel({
               <div>
                 <strong>
                   {status.authRequired
-                    ? "Anmeldung mit zweitem Faktor für diesen lokalen Arbeitsplatz erforderlich."
+                    ? "Anmeldung mit zweitem Faktor für diesen Arbeitsbereich erforderlich."
                     : "Die lokale Finanzdemo bleibt ohne diese optionale Einrichtung bedienbar."}
                 </strong>
                 <p>
-                  Rechnungen und Fahrten bleiben lokal in SQLite. Die
-                  Cloud-Prüfung migriert keine Geschäftsdaten. Produktiver
+                  {status.financialStorage === "cloud-supabase"
+                    ? "Deine Testdaten werden in deinem Supabase-Arbeitsbereich gespeichert. "
+                    : "Deine Testdaten bleiben auf diesem Rechner. Die Verbindungsprüfung überträgt keine Geschäftsdaten. "}
+                  Produktiver
                   DTA-Versand und die Freigabe für echte Gesundheitsdaten sind
                   weiterhin offen. Passkeys und eine Konto-Wiederherstellung
                   sind in dieser Oberfläche noch nicht umgesetzt.

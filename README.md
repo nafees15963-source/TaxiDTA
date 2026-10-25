@@ -1,10 +1,12 @@
 # TaxiDTA
 
-TaxiDTA ist eine lokal laufende deutschsprachige Testanwendung für Fahrten, Tarifberechnung und Rechnungen. Die Daten werden im Backend gespeichert; neu ausgestellte PDF-Rechnungen werden als Original archiviert. Diese Version ist ausschließlich für erfundene Daten vorgesehen.
+TaxiDTA ist eine deutschsprachige Testanwendung für Abrechnungsfälle, Tarifberechnung und Rechnungen. Die Vercel-Version verwendet eine Serverless-API und Supabase für Anmeldung und dauerhafte Datenspeicherung. Ein lokaler Backend-Server wird dafür nicht benötigt. Rechnungsfälle enthalten eine Verordnung mit bis zu 20 Einzelfahrten; mehrere Fälle lassen sich gemeinsam abrechnen.
 
-Die Anwendung unterstützt inzwischen die Anmeldung des festgelegten Inhabers mit Passwort und Authenticator-TOTP. Bei aktivierter Anmeldepflicht schützt das Backend sämtliche fachlichen APIs einschließlich PDF und Export. Supabase dient bisher nur der Anmeldung, Inhaberbindung und einem begrenzten Verbindungstest; Kunden, Fahrten, Rechnungen und PDFs bleiben lokal in SQLite.
+Die Online-API verlangt die Anmeldung des festgelegten Inhabers mit Passwort und Authenticator-TOTP. Die Datenbank prüft Inhaber, MFA und aktive Websitzung. Archivierte PDFs und Rechnungshistorie werden gegen nachträgliche Änderungen geschützt. Der aktuelle Workspace ist auf 1,9 MB einschließlich PDF-Archiven begrenzt und für synthetische Tests ausgelegt.
 
-**Kein Produktivsystem:** Passkeys und Wiederherstellung, vollständige Muster-4-Verarbeitung sowie §302-Abrechnungsdateigenerator und -Transport fehlen. Die DTA-Zentrale erzeugt einen Bereitschaftsbericht mit Sperrgründen. PDF-Ausgaben sind Testdokumente und keine validierte XRechnung/ZUGFeRD-Datei. Die Integration erteilt keine Freigabe für echte Gesundheitsdaten.
+**Kein Produktivsystem:** Der vollständige §302-Dateigenerator und echte DTA-Transport fehlen. Die DTA-Zentrale zeigt die tatsächlichen Sperrgründe. PDFs sind Testdokumente. Ein persönlicher Online-Test von Passwort, TOTP, Speicherung und PDF-Abruf nach dem Deployment steht noch aus.
+
+Für den GitHub-Import in Vercel und die erforderlichen Server-Einstellungen: [VERCEL.md](docs/VERCEL.md).
 
 Für den Einstieg auf dem Mac: [START_HIER.md](START_HIER.md).
 
@@ -37,7 +39,7 @@ Nach einem Build lässt sich die gebaute Oberfläche mit `npm start` ebenfalls l
 
 Der Server lädt vorhandene lokale Einstellungen aus der ignorierten `.env.local`. Projekt-URL, Publishable Key und bestätigte Inhaber-UUID werden dort oder über die Prozessumgebung konfiguriert. `TAXIDTA_AUTH_REQUIRED=true` schaltet die Anmeldepflicht ein und verlangt diese vollständige Konfiguration. Fehlt Supabase vollständig, bleibt die lokale synthetische Demo ohne Login möglich. Ein Fehler im geschützten Modus fällt niemals auf diesen offenen Modus zurück.
 
-Im eingerichteten Projekt wurden die tatsächliche Region **AWS `eu-central-1`, Frankfurt**, das bestätigte Inhaberkonto und die Datenbankbindung über den Verwaltungszugang geprüft. Die zwei Einrichtungsmigrationen sind angewendet. Reale SQL-Negativprüfungen wiesen anonyme Zugriffe, AAL1 und behauptetes AAL2 ohne aktive Sitzung ab. Der persönliche Passwort-/TOTP-Login und der positive UUID-Schreib-/Lese-/Löschtest stehen noch aus. Die verwaltete Entwicklungsumgebung blockiert derzeit direkte HTTPS-Verbindungen zur Projektadresse; der Plugin-Verwaltungszugriff funktioniert.
+Im eingerichteten Projekt wurden die tatsächliche Region **AWS `eu-central-1`, Frankfurt**, das bestätigte Inhaberkonto und die Datenbankbindung über den Verwaltungszugang geprüft. Alle vier Einrichtungsmigrationen einschließlich Websitzungen und Cloud-Workspace sind angewendet. Reale SQL-Negativprüfungen wiesen anonyme Zugriffe, AAL1 und behauptetes AAL2 ohne aktive Sitzung ab. Der persönliche Passwort-/TOTP-Login und der positive UUID-Schreib-/Lese-/Löschtest stehen noch aus. Die verwaltete Entwicklungsumgebung blockiert derzeit direkte HTTPS-Verbindungen zur Projektadresse; der Plugin-Verwaltungszugriff funktioniert.
 
 Mit `npm run supabase:check` lässt sich der erlaubte Netzwerkpfad ohne Passwort prüfen. Der Befehl meldet keine erfolgreiche Anmeldung oder Produktionsbereitschaft. Die genaue Einrichtung im Browser beschreibt [START_HIER.md](START_HIER.md). Passwörter, QR-Schlüssel und Authenticator-Codes werden ausschließlich dort eingegeben, niemals im Chat.
 

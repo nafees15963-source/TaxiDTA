@@ -4,6 +4,9 @@ import { relative, join } from "node:path";
 const root = process.cwd();
 const excluded = new Set([
   "node_modules",
+  ".sites-runtime",
+  ".wrangler",
+  "outputs",
   ".git",
   "dist",
   "work",

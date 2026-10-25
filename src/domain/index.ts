@@ -108,8 +108,20 @@ export function calculateTax(input: { kind: JourneyKind; vehicle: VehicleKind; k
   const source = '§ 12 Abs. 2 Nr. 10 UStG; https://www.gesetze-im-internet.de/ustg_1980/__12.html; amtlicher Text abgerufen am 22.10.2026 (R04). Demo-Regel für inländischen, qualifizierten Taxiverkehr; steuerliche Sonderfälle und betriebliche Freigabe offen.';
   if (input.sameMunicipality === true) return { rate: 7, reason: '7 %: qualifizierter Taxiverkehr vollständig innerhalb einer Gemeinde.', ruleId: 'DE-2026-USTG12-2-10-MUNICIPALITY', source };
   if (km <= 5000n) return { rate: 7, reason: '7 %: qualifizierter Taxiverkehr mit höchstens 50 Besetztkilometern.', ruleId: 'DE-2026-USTG12-2-10-50KM', source };
-  if (input.sameMunicipality !== false) return fail('MUNICIPALITY_REQUIRED', 'Bei mehr als 50 km bitte bestätigen, ob die Fahrt vollständig innerhalb einer Gemeinde liegt.');
+  if (input.sameMunicipality !== false) return fail('MUNICIPALITY_REQUIRED', 'Bei mehr als 50 km fehlt noch die automatische Prüfung der gesetzlichen Gemeinde-Ausnahme. Der Steuersatz ist noch nicht abschließend bestimmt.');
   return { rate: 19, reason: '19 %: Taxiverkehr über 50 km und über eine Gemeindegrenze.', ruleId: 'DE-2026-USTG12-1-TAXI-LONG', source: '§ 12 Abs. 1, Abs. 2 Nr. 10 UStG; https://www.gesetze-im-internet.de/ustg_1980/__12.html; amtlicher Text abgerufen am 22.10.2026 (R04). Demo-Regel für inländische Standardleistungen; steuerliche Sonderfälle und betriebliche Freigabe offen.' };
+}
+
+/** Planning display only. Pending municipal checks must block invoice issuance. */
+export function calculateTaxPreview(input:Parameters<typeof calculateTax>[0]):TaxResult&{pending:boolean}{
+  try{return {...calculateTax(input),pending:false};}
+  catch(error){
+    if(error instanceof DomainError&&error.code==='MUNICIPALITY_REQUIRED')return {
+      rate:19,pending:true,reason:'Vorläufig 19 % für mehr als 50 km; automatische Prüfung der gesetzlichen Gemeinde-Ausnahme noch offen.',
+      ruleId:'DE-2026-TAX-PREVIEW-PENDING',source:'§ 12 Abs. 1 und Abs. 2 Nr. 10 UStG. Diese Vorschau ist keine abschließende Steuerfestlegung.'
+    };
+    throw error;
+  }
 }
 
 /** Round once per gross invoice line, commercial half-up, then derive tax as exact residual. */

@@ -1,6 +1,6 @@
 {
   "name": "taxidta",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -18,12 +18,17 @@
     "restore:test": "tsx scripts/restore-test.ts",
     "security:check": "tsx scripts/security-check.ts",
     "check": "npm run test && npm run build && npm run security:check",
-    "supabase:check": "tsx scripts/supabase-check.ts"
+    "supabase:check": "tsx scripts/supabase-check.ts",
+    "build:site": "node scripts/build-hosted.mjs",
+    "db:generate:site": "drizzle-kit generate",
+    "dakota:check": "node scripts/dakota-check.mjs"
   },
   "dependencies": {
+    "@noble/hashes": "2.4.0",
     "@supabase/supabase-js": "2.118.0",
     "express": "^5.1.0",
     "lucide-react": "^0.468.0",
+    "pdf-lib": "1.17.1",
     "pdfkit": "^0.17.2",
     "qrcode": "1.5.4",
     "react": "^19.1.1",
@@ -39,6 +44,9 @@
     "@types/qrcode": "1.5.6",
     "@types/react": "^19.1.1",
     "@types/react-dom": "^19.1.1",
+    "drizzle-kit": "0.31.11",
+    "drizzle-orm": "0.45.2",
+    "esbuild": "0.28.2",
     "tsx": "^4.20.0",
     "typescript": "^5.9.2",
     "vite": "^7.1.0"

@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 const suffix = Date.now().toString().slice(-6);
-test("Privatkunde → vergangene Fahrt → Rechnung → unveränderliches PDF → Teilzahlung", async ({
+test("Gespeicherter Privatauftrag → Rechnung → unveränderliches PDF → Teilzahlung", async ({
   page,
   request,
 }) => {
@@ -24,23 +24,32 @@ test("Privatkunde → vergangene Fahrt → Rechnung → unveränderliches PDF �
     .getByRole("button", { name: "Kunde speichern", exact: true })
     .click();
   await expect(dialog).not.toBeVisible();
-  await page.getByRole("button", { name: "Fahrten", exact: true }).click();
-  await page
-    .getByRole("button", { name: "Fahrt erfassen", exact: true })
-    .click();
-  await dialog
-    .getByLabel("Kunde / Test-Kostenträger")
-    .selectOption({ label: "Beispielkunde " + suffix });
-  await dialog.getByLabel("Leistungsdatum", { exact: true }).fill("2026-10-20");
-  await dialog
-    .getByLabel("Abholort", { exact: true })
-    .fill("Testbahnhof " + suffix);
-  await dialog.getByLabel("Zielort", { exact: true }).fill("Testhotel");
-  await dialog.getByLabel("Vereinbarter Gesamtpreis brutto (€)").fill("107,00");
-  await dialog
-    .getByRole("button", { name: "Fahrt speichern", exact: true })
-    .click();
-  await expect(dialog).not.toBeVisible();
+  // Fixture only: the dedicated trip-entry UI has intentionally been removed.
+  const state = await (await request.get("/api/state")).json();
+  const customer = state.customers.find(
+    (item: { name: string }) => item.name === "Beispielkunde " + suffix,
+  );
+  const fixture = await request.post("/api/journeys", {
+    headers: { "X-CSRF-Token": state.csrfToken },
+    data: {
+      customerId: customer.id,
+      kind: "taxi",
+      date: "2026-10-20",
+      from: "Testbahnhof " + suffix,
+      to: "Testhotel",
+      km: "20",
+      vehicle: "taxi",
+      sameMunicipality: null,
+      grossCents: 10700,
+      description: "Gespeicherter fiktiver Privatauftrag",
+      tariff: null,
+      contractConfirmed: false,
+      prescriptionConfirmed: false,
+      receiptNumber: null,
+    },
+  });
+  expect(fixture.status()).toBe(201);
+  await page.reload();
   await page
     .getByRole("button", { name: "Rechnungen & Zahlungen", exact: true })
     .click();
@@ -196,64 +205,33 @@ test("Desktop und Mobilansicht mit synthetischen Daten visuell prüfen", async (
     ),
   ).toBe(true);
 });
-test("Offene Krankenfahrt korrigieren, ArtII-Testrechnung erstellen und gebundene Fahrt sperren", async ({
+test("Frühere Fahrtenadresse und Suche führen ausschließlich zum Abrechnungsfall", async ({
   page,
 }) => {
   await page.goto("/?page=journeys");
   await expect(
-    page.getByRole("heading", { name: "Fahrten", exact: true }),
+    page.getByRole("heading", { name: "Abrechnungsfälle", exact: true }),
   ).toBeVisible();
-  const row = page.getByRole("row").filter({ hasText: "Testort E" });
-  await row.getByRole("button", { name: "Bearbeiten", exact: true }).click();
-  const dialog = page.getByRole("dialog");
   await expect(
-    dialog.getByRole("heading", { name: "Offene Fahrt bearbeiten" }),
-  ).toBeVisible();
-  await dialog
-    .getByLabel("Verordnung und Genehmigung im Testfall geprüft")
-    .check();
-  await dialog.getByLabel("Vertragsart", { exact: true }).selectOption("II");
-  await dialog
-    .getByLabel("Leistungsbeschreibung (optional)")
-    .fill("Korrigierte Testfahrt " + suffix);
-  await dialog.getByLabel("Besetzte Kilometer", { exact: true }).fill("20");
-  await dialog.getByRole("button", { name: "Änderungen speichern" }).click();
-  await expect(dialog).not.toBeVisible();
-  await expect(row.getByText("51,74 €", { exact: true })).toBeVisible();
-  await page
-    .getByRole("button", { name: "Rechnungen & Zahlungen", exact: true })
-    .click();
-  await page
-    .getByRole("button", { name: "Neue Rechnung", exact: true })
-    .click();
-  await dialog
-    .getByLabel("Kunde / Rechnungsempfänger")
-    .selectOption({ label: "Musterkasse Nord (fiktiv)" });
-  await dialog
-    .locator(".journey-selection label")
-    .filter({ hasText: "Korrigierte Testfahrt " + suffix })
-    .getByRole("checkbox")
-    .check();
-  await expect(
-    dialog.getByText("Kassenfrist ungeprüft", { exact: false }),
-  ).toBeVisible();
-  await dialog
-    .getByRole("button", { name: "Testrechnung verbindlich erstellen" })
-    .click();
-  await expect(dialog).not.toBeVisible();
-  await expect(
-    page
-      .locator(".invoice-detail")
-      .getByText("51,74 €", { exact: true })
-      .first(),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Fahrten", exact: true }).click();
-  await expect(
-    page
-      .getByRole("row")
-      .filter({ hasText: "Testort E" })
-      .getByRole("button", { name: "Bearbeiten" }),
+    page.getByRole("button", { name: "Fahrt erfassen", exact: true }),
   ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Fahrten", exact: true }),
+  ).toHaveCount(0);
+  await page.keyboard.press("Control+k");
+  const dialog = page.getByRole("dialog");
+  await page.getByLabel("Navigation durchsuchen").fill("Neue Fahrt");
+  await expect(
+    dialog.getByRole("button", { name: "Neue Fahrt erfassen", exact: true }),
+  ).toHaveCount(0);
+  await page.getByLabel("Navigation durchsuchen").fill("Neue Abrechnung");
+  await dialog
+    .getByRole("button", { name: "Neue Abrechnung starten", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Neue Abrechnung", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Fahrtdatum 1", { exact: true })).toBeVisible();
 });
 test("KE-Teilprofil liest synthetische Struktur und sperrt fehlerhafte Segmentzählung", async ({
   page,
